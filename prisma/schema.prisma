@@ -1,0 +1,244 @@
+// Prisma schema — sistema de precificação de peças 3D
+// Ver ESTUDO-PRECIFICACAO.md na raiz do projeto para a lógica de negócio de origem.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Tenant / usuários
+// ---------------------------------------------------------------------------
+
+model Company {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  users         User[]
+  printers      Printer[]
+  filaments     Filament[]
+  components    Component[]
+  fixedExpenses FixedExpense[]
+  assets        Asset[]
+  laborConfig   LaborConfig?
+  processSteps  ProcessStep[]
+  salesChannels SalesChannel[]
+  products      Product[]
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         String   @default("owner")
+  createdAt    DateTime @default(now())
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+}
+
+// ---------------------------------------------------------------------------
+// Cadastros auxiliares (todos escopados por companyId)
+// ---------------------------------------------------------------------------
+
+model Printer {
+  id                 String  @id @default(cuid())
+  name               String
+  price              Decimal @db.Decimal(12, 2)
+  maintenanceCost    Decimal @db.Decimal(12, 2)
+  usefulLifeHours    Decimal @db.Decimal(12, 2)
+  powerConsumptionKw Decimal @db.Decimal(8, 4)
+
+  companyId String
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  products  Product[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Filament {
+  id            String  @id @default(cuid())
+  name          String
+  brand         String?
+  type          String? // PLA, PETG, ABS...
+  description   String?
+  spoolCost     Decimal @db.Decimal(12, 2)
+  spoolWeightKg Decimal @db.Decimal(8, 3)
+
+  companyId String
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  products  Product[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Component {
+  id       String  @id @default(cuid())
+  name     String
+  category String?
+  unitCost Decimal @db.Decimal(12, 4)
+
+  companyId String
+  company   Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  products  ProductComponent[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model FixedExpense {
+  id           String  @id @default(cuid())
+  category     String
+  monthlyValue Decimal @db.Decimal(12, 2)
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Asset {
+  id             String  @id @default(cuid())
+  name           String
+  value          Decimal @db.Decimal(12, 2)
+  usefulLifeYears Decimal @db.Decimal(6, 2)
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Um registro "ativo" de configuração de mão de obra por empresa.
+model LaborConfig {
+  id                  String  @id @default(cuid())
+  numPeople           Int     @default(1)
+  dailyHours          Decimal @db.Decimal(5, 2)
+  workDaysPerMonth    Decimal @db.Decimal(5, 2)
+  productivityPct     Decimal @db.Decimal(5, 4) // fração 0-1
+
+  companyId String  @unique
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  updatedAt DateTime @updatedAt
+}
+
+model ProcessStep {
+  id             String  @id @default(cuid())
+  name           String
+  defaultMinutes Decimal @db.Decimal(8, 2)
+
+  companyId String
+  company   Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  products  ProductProcessStep[]
+
+  createdAt DateTime @default(now())
+}
+
+model SalesChannel {
+  id                 String  @id @default(cuid())
+  name               String
+  feePercentage      Decimal @db.Decimal(6, 4) // fração 0-1
+  fixedFeeRulesJson  Json?   // regras de custo fixo escalonado por faixa de preço (ex. Shopee)
+
+  companyId String
+  company   Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  simulations PricingSimulation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Produtos
+// ---------------------------------------------------------------------------
+
+model Product {
+  id             String  @id @default(cuid())
+  name           String
+  category       String?
+  subcategory    String?
+  size           String?
+  color          String?
+  imageUrl       String?
+  weightG        Decimal @db.Decimal(10, 2)
+  printTimeMin   Decimal @db.Decimal(10, 2)
+  piecesPerPlate Int     @default(1)
+
+  companyId  String
+  company    Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  filamentId String
+  filament   Filament @relation(fields: [filamentId], references: [id])
+  printerId  String
+  printer    Printer  @relation(fields: [printerId], references: [id])
+
+  components   ProductComponent[]
+  processSteps ProductProcessStep[]
+  simulations  PricingSimulation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ProductComponent {
+  productId   String
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  componentId String
+  component   Component @relation(fields: [componentId], references: [id], onDelete: Cascade)
+  quantity    Decimal   @db.Decimal(10, 2) @default(1)
+
+  @@id([productId, componentId])
+}
+
+model ProductProcessStep {
+  productId       String
+  product         Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  processStepId   String
+  processStep     ProcessStep @relation(fields: [processStepId], references: [id], onDelete: Cascade)
+  minutesOverride Decimal?    @db.Decimal(8, 2)
+
+  @@id([productId, processStepId])
+}
+
+// ---------------------------------------------------------------------------
+// Simulações de precificação (histórico)
+// ---------------------------------------------------------------------------
+
+enum PricingMode {
+  MARKUP_DIVISOR
+  FIXED_MARKUP_TABLE
+}
+
+model PricingSimulation {
+  id String @id @default(cuid())
+
+  productId      String
+  product        Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  salesChannelId String?
+  salesChannel   SalesChannel? @relation(fields: [salesChannelId], references: [id])
+
+  mode           PricingMode
+  failureRatePct Decimal     @db.Decimal(6, 4) @default(0)
+  shippingCost   Decimal     @db.Decimal(12, 2) @default(0)
+  kwhCost        Decimal     @db.Decimal(8, 4)
+
+  // Índices de comercialização (modo MARKUP_DIVISOR), frações 0-1
+  taxPct     Decimal? @db.Decimal(6, 4)
+  cardFeePct Decimal? @db.Decimal(6, 4)
+  otherFeePct Decimal? @db.Decimal(6, 4)
+  profitPct  Decimal? @db.Decimal(6, 4)
+
+  resultSnapshotJson Json // breakdown completo calculado no momento da simulação
+
+  createdAt DateTime @default(now())
+}
